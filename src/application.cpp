@@ -4,93 +4,101 @@
 #include "WS2812BSPIController.h"
 #include "ClapDetection.h"
 #include "HueLightsControl.h"
-// This #include statement was automatically added by the Spark IDE.
-//#include "captouch.h"
-
 #include "SmartCube.h"
 #include "MacControl.h"
 #include <string.h>
 
 
-
+//Manually connect to the wifi &cloud. This way the startup process is not blocked while waiting for a wifi connection
 SYSTEM_MODE(SEMI_AUTOMATIC);
+
+
 /*############################ Gyro Declaration#############################*/
-
-
 MPU6050 accelgyro;
 ws2812BSPIController ledControl;
+int16_t ax, ay, az; //3-axis acceleration variables
+int16_t gx, gy, gz; //3-axis rotation variables
 
-ClapDetection clapDetector;
-HTTPClient client;
-MacControl macControl(&client);
+
+/*############################ Controller Declaration#############################*/
+HTTPClient client; //initialize a httpclient
+MacControl macControl(&client); //Init the controller objects 
 HueLightsControl hueControl(&client);
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
+
+ClapDetection clapDetector;
+
+#define LED_PIN D7  //define output LED
+#define VIBRATION_MOTOR_PIN D2  //define vibration motor pin
+#define TOUCH_OUTPUT D4
+#define TOUCH_INPUT D5
+#define MPU6050_POWER_PIN D6
+#define SDA_PIN D0
+#define SDX_PIN D1
+
+int millisSleepDelay = 20000; // time to wait for user action before going to sleep
+float rotationSensitivity = 0.08; //define rotation sensitivity 
+
+CapTouch Touch(TOUCH_OUTPUT, TOUCH_INPUT);//init capacitive touch detection
 
 
-#define OUTPUT_READABLE_ACCELGYRO
-
-#define LED_PIN D7
-
-CapTouch Touch(D4, D5);
 
 
 
-float rotationSensitivity = 0.08;
+bool blinkState = false; //alternating state changing after each loop cycle, shown
+int oldOrientation = 0; //the last valid orientation
+unsigned long lastShow = millis(); //when was the last time the led color has been updated
 
-bool blinkState = false;
-int oldOrientation = 0;
-unsigned long lastShow = millis();
-
-unsigned long millisColorWasSent;
+unsigned long millisColorWasSent; // when was the last time the color was sent over the network
 float dimmBuffer = 0;
-float dimmValues[12] = {1,1,1,1,1,1,1,1,1,1,1,1};
-
-unsigned long timeOfLastUserAction = 0;
-bool sleeping = false;
-
+float dimmValues[12] = {1,1,1,1,1,1,1,1,1,1,1,1}; // memory of the dimm values of each side of the cube
+unsigned long wantsToShowModes = 0; // when did the gyro detect a motion that is within the threshhold of showing the modes
+#define DELAY_BEFORE_SHOWING_MODES 150 //delay in ms to wait between wantsToShowModes and actually showing the modes. An increased delay filters out more gyro fluptuations but is less responsive to user input
+unsigned long changeColorTime = millis(); // when was the last time the color was changed
+unsigned long timeOfLastUserAction = 0; // when was the last time that some sort of input from the user was detected
+bool sleeping = false; //is the device sleeping or active (sleeping = leds off, gyro off, waiting for touchevent)
+bool showingModes = false; // is the cube currently showing the modes (e.g. showing which color is on which side)
+bool isTouching = false; // is the cube being touched
+// set the host ip address of the philipps hue bridge
+// ip must be a String with a IPv4 address (e.g. 192.168.1.2)
 int setBridgeIP(String ip){
     return hueControl.setBridgeIP(ip);
 }
 
 void setup() {
-
-    Serial.begin(9600);
-
-    Spark.variable("orientation", &oldOrientation, INT);
+    Serial.begin(9600); // initialize serial communication
+	
+	/*############################# Spark Cloud init ###############################*/
+    Spark.variable("orientation", &oldOrientation, INT); //
     Spark.function("notification", notification);
     Spark.function("setBridgeIP", setBridgeIP);
-    //Spark.variable("lastTouchSapmle", &Touch.tDelay, INT);
+    //Spark.variable("lastTouchSapmle", &Touch.tDelay, INT); //for debug purposes: what was the last delay measured
     Spark.variable("touchdelay", &Touch.m_tReading, INT);
     Spark.variable("tochbaseline", &Touch.m_tBaseline, INT);
-    
-    Spark.variable("ax", &ax, INT);
-    Spark.variable("ay", &ay, INT);
-    Spark.variable("az", &az, INT);
-    Spark.connect();
-    pinMode(LED_PIN, OUTPUT);
-    pinMode(D6, OUTPUT);
+
+    Spark.connect(); // enable wifi and connect to spark cloud
+    pinMode(LED_PIN, OUTPUT); //set the LED pin to Output
+    pinMode(MPU6050_POWER_PIN, OUTPUT); // set the mpu6050 power controller pin to Output
 
 
     //turn MPU6050 off
-    digitalWrite(D6, LOW);
-    pinMode(D0, INPUT);
-    pinMode(D1, INPUT);
-    delay(1000);
+    digitalWrite(MPU6050_POWER_PIN, LOW);
+    pinMode(SDA_PIN, INPUT);
+    pinMode(SDX_PIN, INPUT);
+    delay(100);
+	
     //turn MPU6050 on
-    digitalWrite(D6, HIGH);
+    digitalWrite(MPU6050_POWER_PIN, HIGH);
     // join I2C bus (I2Cdev library doesn't do this automatically)
     Wire.begin();
-    // initialize serial communication
+    
 
-    delay(8000);
-    Touch.setup();
-    //Touch.setup();
-    // initialize device
+    delay(8000); //wait some time before starting loop to be able to start a firmware update in case starting the loop breaks the device
+    Touch.setup(); //make initial capacitive touch baseline measurements
+	
+    // initialize MPU6050
     Serial.println("Initializing I2C devices...");
     accelgyro.initialize();
-
 
     // verify connection
     Serial.println("Testing device connections...");
@@ -121,12 +129,12 @@ void setup() {
     accelgyro.setYAccelOffset(-3355); // 900 = 22000   -3900 = -3500   -3300 = 1800  -3400=1000  -3600=-700     -3315
     accelgyro.setZAccelOffset(1250); // -400 = -14000   400 = -8000   900 = -3900   1200=-1400  1500=1000
 
-    timeOfLastUserAction = millis();
-    sleeping = false;
-    oldOrientation = 0;
-    pinMode(D2, OUTPUT);
-    digitalWrite(D2, LOW);
-    ledControl.ledSpiInit();
+    timeOfLastUserAction = millis(); //set time of last user action to current time
+    sleeping = false; // set the state to not sleeping
+    oldOrientation = 0; // set the initial orientation
+    pinMode(VIBRATION_MOTOR_PIN, OUTPUT); //set the vibration motor pin to Output
+    digitalWrite(VIBRATION_MOTOR_PIN, LOW); 
+    ledControl.ledSpiInit(); // init the SPI connection of the WS2812BSPIController
 
 }
 
@@ -148,7 +156,7 @@ void pulse(int r, int g, int b, int millies, int ledNr) {
     ledControl.setColor(ledNr, r, g, b);
 }
 
-int millisSleepDelay = 20000;
+
 
 void resetSleepTimer() {
     timeOfLastUserAction = millis();
@@ -159,17 +167,20 @@ bool isTimeToSleep() {
     return millis() > timeOfLastUserAction + millisSleepDelay;
 }
 
+/*
+	Vibrate for a certain amount of time
+	TODO: make this method non-blocking (without using the delay function)
+*/
 void vibrate(int millis) {
-    digitalWrite(D2, HIGH);
+    digitalWrite(VIBRATION_MOTOR_PIN, HIGH);
     delay(millis);
-    digitalWrite(D2, LOW);
+    digitalWrite(VIBRATION_MOTOR_PIN, LOW);
 }
 
 
-bool showingModes = false;
-bool isTouching = false;
 
-//Docking Station relevant stuff
+
+//Docking Station LED fading relevant stuff
 uint8_t isInDockingStation = false;
 long lastLoopTime = millis();
 float currentColor[6][3] = {
@@ -216,29 +227,6 @@ void initDockingStationMode() {
 
 void nextFadeStep(int timePassed) {
     for (int i = 0; i < 6; i++) {
-
-        //        for (int j = 0; i < 3; j++) {
-        //            currentColor[i][j] = currentColor[i][j] + difference[i][j] / 10;
-        //
-        //
-        //
-        //            if (
-        //                    (difference[i][j] >= 0 && currentColor[i][j] >= targetColor[i][j])
-        //                    || (difference[i][j] <= 0 && currentColor[i][j] <= targetColor[i][j])) {
-        //                targetColor[i][0] = rand() % 255;
-        //                targetColor[i][1] = rand() % 255;
-        //                targetColor[i][2] = rand() % 255;
-        //
-        //                difference[i][0] = targetColor[i][0] - currentColor[i][0];
-        //                difference[i][1] = targetColor[i][1] - currentColor[i][1];
-        //                difference[i][2] = targetColor[i][2] - currentColor[i][2];
-        //                j = 100;
-        //            }
-        //        }
-        //Serial.println(currentColor[i][0]);
-        //        ledControl.setColor(i, currentColor[i][0], currentColor[i][1], currentColor[i][2]);
-
-
         currentColor[i][0] = currentColor[i][0] + (difference[i][0] * timePassed * ((rand() % 100) / 500.0));
         currentColor[i][1] = currentColor[i][1] + (difference[i][1] * timePassed * ((rand() % 100) / 500.0));
         currentColor[i][2] = currentColor[i][2] + (difference[i][2] * timePassed * ((rand() % 100) / 500.0));
@@ -255,28 +243,15 @@ void nextFadeStep(int timePassed) {
             }
         }
         ledControl.setColor(i, currentColor[i][0], currentColor[i][1], currentColor[i][2]);
-        
-        
-
-    }
-    
-            Serial.print("next step ");
-    Serial.print(currentColor[0][0]);
-    Serial.print("\t");
-    Serial.print(currentColor[0][1]);
-    Serial.print("\t");
-    Serial.println(currentColor[0][2]);
-    
+    }    
 }
 
 
 
 
-unsigned long wantsToShowModes = 0;
-unsigned long changeColorTime = millis();
+
 
 void wlanRead() {
-
     hueControl.wlanRead();
     macControl.readResponse();
 }
@@ -408,7 +383,7 @@ void loop() {
         }
     }
 
-    if (!showingModes && wantsToShowModes != 0 && millis() - wantsToShowModes > 150) {
+    if (!showingModes && wantsToShowModes != 0 && millis() - wantsToShowModes > DELAY_BEFORE_SHOWING_MODES) {
         showModes();
     }
 
