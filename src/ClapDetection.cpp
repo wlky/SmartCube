@@ -11,8 +11,6 @@ int lastClap = 0;
 int claps = 0;
 
 
-
-
 int ClapDetection::detectClaps() {
   unsigned long startMillis= millis();  // Start of sample window
   unsigned int peakToPeak = 0;   // peak-to-peak level
@@ -22,7 +20,7 @@ int ClapDetection::detectClaps() {
 
   while (millis() - startMillis < sampleWindow) {
     sample = analogRead(MIC);
-    if(sample < 1000){
+    if(sample < 1000){ //Due to the negative values freaking out when the battery gets low ignore them
         continue;
     }
     
@@ -33,16 +31,11 @@ int ClapDetection::detectClaps() {
       signalMin = (signalMin+sample)/2;  // save just the min levels
     }
   }
-  //Serial.print("signalMax: ");
- /* Serial.print(signalMax);
-  Serial.print("\t");
-  Serial.println(signalMin);
-  */
+
   peakToPeak = signalMax - signalMin; //amplitude
 
   if(peakToPeak > 2200 && millis() - lastClap > 200) {
     Serial.print("Clapped: ");
-
     
     returnValue = 1;
     

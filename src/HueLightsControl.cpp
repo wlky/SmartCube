@@ -33,7 +33,7 @@ int success = 0;
 
 
 void HueLightsControl::sendCommandToHueBridge2(char requestBody[], char endpoint[]) {
-  client->makeRequest(2, endpoint, bridgeIP, PORT, false, "application/json","", "", requestBody, response, 1024, true, false);
+  client->makeRequest(2, endpoint, bridgeIP, PORT, true, "application/json","", "", requestBody, response, 1024, true);
 }
 
 
@@ -194,192 +194,72 @@ void HueLightsControl::switchLightsOn(boolean on) {
     // strcat(endpoint, "/lights/1/state");
 
     sprintf(endpoint, "/api/");
-    strcat(endpoint, bridgeUser);
-    strcat(endpoint, "/groups/0/action");
-
-    
-    
-    
-    
+    // strcat(endpoint, bridgeUser);
+    // strcat(endpoint, "/groups/0/action");
+    strcat(endpoint, "setBrightness");
+	
     sendCommandToHueBridge2(requestBody, endpoint);
 }
 
-int deltaBrightness = 20;
-int brightness = 255;
-
-int lastRequestBrightness = 0;
-int timeBetweenRequestsBrightness = 100; //500
-
-void HueLightsControl::setBrightness(float _rotationValue) {
-  //brightness between 0 and 255
-  //getLampInformationFromBridge(1);
-  timeSince = millis()-lastRequestBrightness;
-
-  if(!(timeSince >= timeBetweenRequestsBrightness)) {
-    return;
-  }
-
-  if(_rotationValue > 0.01 || _rotationValue < -0.01){
-    if(_rotationValue > 0) {
-      brightness += deltaBrightness;
-      if (brightness > 255) {
-        brightness = 255;
-      }
-    }
-    else {
-      brightness -= deltaBrightness;
-      if(brightness < 0) {
-        brightness = 0;
-      }
-    }
-
-    // Serial.print("Rotation value:\t");
-    // Serial.println(_rotationValue);
-
-    // Serial.print("Brightness:\t");
-    // Serial.println(brightness);
-
-    char brightnessString[10];
-    itoa(brightness, brightnessString, 10);
-    strcpy(requestBody,"");
-    sprintf(requestBody, "%s", "{\"bri\":");
-    strcat(requestBody, brightnessString);
-    strcat(requestBody, "}");
-
-    char endpoint[200];
-    sprintf(endpoint, "/api/");
-    strcat(endpoint, bridgeUser);
-    strcat(endpoint, "/groups/0/action");
-
-    sendCommandToHueBridge2(requestBody, endpoint);
-
-    lastRequestBrightness = millis();
-  }
-}
+/*
+	Send the color to the hue bridge
+*/
 
 bool HueLightsControl::sendColor(unsigned int r, unsigned int g, unsigned int b) {
-    //if (!client->isConnected()) {
 
-        // if(piOrHue){
-        rgb color;
-        hsv HSVColor;
-        color.r = r / 2.55;
-        color.g = g / 2.55;
-        color.b = b / 2.55;
-        
-        HSVColor = rgb2hsv(color);
-        
-        char brightnessString[10];
-        itoa(int(ws2812BSPIController::dimmValue * 255), brightnessString, 10);
-        strcpy(requestBody, "");
-        sprintf(requestBody, "%s", "{\"bri\" : ");
-        strcat(requestBody, brightnessString);
+	// convert the incoming RGB values into the HSV values the bridge needs
+	rgb color;
+	hsv HSVColor;
+	color.r = r / 2.55;
+	color.g = g / 2.55;
+	color.b = b / 2.55;
+	HSVColor = rgb2hsv(color);
+	
+	
+	char brightnessString[10];
+	itoa(int(ws2812BSPIController::dimmValue * 255), brightnessString, 10); // convert the dimm value into a string and save it in brightnessString
+	strcpy(requestBody, "");
+	sprintf(requestBody, "%s", "{\"bri\" : ");
+	strcat(requestBody, brightnessString);
 
-        itoa(int(HSVColor.h * 182), brightnessString, 10);
-        strcat(requestBody, ", \"hue\" : ");
-        strcat(requestBody, brightnessString);
+	itoa(int(HSVColor.h * 182), brightnessString, 10); // convert the hue value into a string and save it in brightnessString
+	strcat(requestBody, ", \"hue\" : ");
+	strcat(requestBody, brightnessString);
 
-        itoa(int(HSVColor.s * 255), brightnessString, 10);
-        strcat(requestBody, ", \"sat\" : ");
-        strcat(requestBody, brightnessString);
+	itoa(int(HSVColor.s * 255), brightnessString, 10); // convert the saturation value into a string and save it in brightnessString
+	strcat(requestBody, ", \"sat\" : ");
+	strcat(requestBody, brightnessString); 
+	
+//  strcat(requestBody, ", \"transitiontime\" : 0");
+	strcat(requestBody, "}");
+	//now the request body should look like: {"bri" : ###, "hue" : ###, "sat" : ###}
 
-        strcpy(endpoint, "");
-        sprintf(endpoint, "/api/");
-//        strcat(endpoint, bridgeUser);
-//        strcat(endpoint, "/groups/0/action");
-        
-        strcat(endpoint, "setBrightness");
-        
-        //strcat(requestBody, ", \"transitiontime\" : 0");
-        strcat(requestBody, "}");
+	
+	// set the endpoint to /api/setBrightness
+	strcpy(endpoint, "");
+	sprintf(endpoint, "/api/");
+//  strcat(endpoint, bridgeUser);
+//  strcat(endpoint, "/groups/0/action");
+	strcat(endpoint, "setBrightness");
+	
+	
 
-        if ((ws2812BSPIController::dimmValue < 0.03 && !turnedOffSent) || forceTurnOff) {
-            strcpy(requestBody, "{ \"on\" : false}");
-            
-            turnedOffSent = true;
-            forceTurnOff = false;
-        }
-        if ((ws2812BSPIController::dimmValue >= 0.03 && turnedOffSent) || forceTurnOn) {
-            strcpy(requestBody, "{ \"on\" : true}");
-            turnedOffSent = false;
-            forceTurnOn = false;
-        }
+	// send the "turn lights on" command when the dimm value is below a certain value and the leds have not been turned off yet
+	if ((ws2812BSPIController::dimmValue < 0.03 && !turnedOffSent) || forceTurnOff) {
+		strcpy(requestBody, "{ \"on\" : false}");
+		
+		turnedOffSent = true;
+		forceTurnOff = false;
+	}
+	
+	// send the "turn lights off" command when the dimm value is above a certain value and the leds have turned off
+	if ((ws2812BSPIController::dimmValue >= 0.03 && turnedOffSent) || forceTurnOn) {
+		strcpy(requestBody, "{ \"on\" : true}");
+		turnedOffSent = false;
+		forceTurnOn = false;
+	}
 
-        //###########################WEG
-//        dtostrf (ws2812BSPIController::dimmValue, 10, 10, brightnessString);
-//        strcpy(endpoint, "/parameter.php?red=");
-//        strcat(endpoint, brightnessString);
-//        strcat(endpoint, "&time=0");
-//        Serial.println(endpoint);
-        //################################
-
-        Serial.println(requestBody);
-        client->makeRequest(2, endpoint, bridgeIP, PORT, true, "application/json","", "", requestBody, response, 1024, true, false);
-        return true;
-    //}
-
-
-
-    return false;
+	// send the http request using the http client
+	sendCommandToHueBridge2(requestBody, endpoint);
+	return true;
 }
-
-
-
-//bool HueLightsControl::sendColor(unsigned int r, unsigned int g, unsigned int b) {
-//    if (!client->isConnected()) {
-//
-//        
-//        
-//        char brightnessString[10];
-//        itoa(r, brightnessString, 10);
-//        strcpy(requestBody, "");
-//        sprintf(requestBody, "%s", "{\"bri\" : ");
-//        strcat(requestBody, brightnessString);
-//
-//        itoa(g, brightnessString, 10);
-//        strcat(requestBody, ", \"hue\" : ");
-//        strcat(requestBody, brightnessString);
-//
-//        itoa(b, brightnessString, 10);
-//        strcat(requestBody, ", \"sat\" : ");
-//        strcat(requestBody, brightnessString);
-//
-//        strcpy(endpoint, "");
-//        sprintf(endpoint, "/smartcube/");
-////        strcat(endpoint, bridgeUser);
-////        strcat(endpoint, "/groups/0/action");
-//        
-//        strcat(endpoint, "calibrate");
-//        
-//        //strcat(requestBody, ", \"transitiontime\" : 0");
-//        strcat(requestBody, "}");
-//
-//        if ((ws2812BSPIController::dimmValue < 0.03 && !turnedOffSent) || forceTurnOff) {
-//            strcpy(requestBody, "{ \"on\" : false}");
-//            
-//            turnedOffSent = true;
-//            forceTurnOff = false;
-//        }
-//        if ((ws2812BSPIController::dimmValue >= 0.03 && turnedOffSent) || forceTurnOn) {
-//            strcpy(requestBody, "{ \"on\" : true}");
-//            turnedOffSent = false;
-//            forceTurnOn = false;
-//        }
-//
-//        //###########################WEG
-////        dtostrf (ws2812BSPIController::dimmValue, 10, 10, brightnessString);
-////        strcpy(endpoint, "/parameter.php?red=");
-////        strcat(endpoint, brightnessString);
-////        strcat(endpoint, "&time=0");
-////        Serial.println(endpoint);
-//        //################################
-//
-//        Serial.println(requestBody);
-//        client->makeRequest(2, endpoint, bridgeIP, PORT, false, "application/json","", "", requestBody, response, 1024, true, false);
-//        return true;
-//    }
-//
-//
-//
-//    return false;
-//}

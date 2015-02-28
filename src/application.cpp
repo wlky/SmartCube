@@ -37,6 +37,8 @@ ClapDetection clapDetector;
 #define SDX_PIN D1
 
 int millisSleepDelay = 20000; // time to wait for user action before going to sleep
+int gyroTollerance = 400; // tollerance of movement noise. Values greater than this will be detected as movements
+int accTollerance = 1600; // amount the acceleration of one axis can deviate from the standard gravity value before being detected as no more laying flat on one side
 float rotationSensitivity = 0.08; //define rotation sensitivity 
 
 CapTouch Touch(TOUCH_OUTPUT, TOUCH_INPUT);//init capacitive touch detection
@@ -245,59 +247,53 @@ void nextFadeStep(int timePassed) {
         ledControl.setColor(i, currentColor[i][0], currentColor[i][1], currentColor[i][2]);
     }    
 }
-
-
-
-
-
-
+//tell the controllers to read the response from the network
 void wlanRead() {
     hueControl.wlanRead();
     macControl.readResponse();
 }
 
+/*################################## MAIN LOOP #######################################*/
 void loop() {
-    //      if(!Serial.available()) {
-    //        return;
-    //      }
-   Serial.print("a/g:\t");
-   Serial.print(ax); Serial.print("\t");
-   Serial.print(ay); Serial.print("\t");
-   Serial.println(az); 
-    wlanRead();
-
+	// Update the color of the LEDs
     if (millis() - lastShow > 30) {
         ledControl.show();
         lastShow = millis();
     }
+	
+	/*
+		When the cube is in the sleep mode only check for touch events
+	*/
+	
     if (sleeping) {
         Serial.println("checking touchEvents ");
         checkTouchEvents();
-        //sendNormalizedColor(Touch.test1, Touch.test2, 0);
-        if (!isTouching) {
-            delay(30);
-
-            blinkState = !blinkState;
+        if (!isTouching) { // when no touch is detected
+            delay(30); // wait a bit and try again
+			
+            blinkState = !blinkState; //and blink the status led
             digitalWrite(LED_PIN, blinkState);
+			
             return;
-        } else {
-            transitionToMode(oldOrientation, 500);
-            resetSleepTimer();
+        } else { // when no touch is detected
+            transitionToMode(oldOrientation, 500); //turn back on to the last state known
+            resetSleepTimer(); // and reset the sleep timer
             isTouching = false;
-
         }
     }
-    if (!accelgyro.testConnection()) {
-        delay(50);
-        if (!accelgyro.testConnection()) {
-            for (int i = 0; i < 3; i++) {
+	
+	// Gyro test. Before reading from the gyro first check whether the connection is working. This test mostly fails when the battery is getting low.
+    if (!accelgyro.testConnection()) { //if the connection is not working
+        delay(50);					// wait a bit
+        if (!accelgyro.testConnection()) { // and try again, if it is still not working
+            for (int i = 0; i < 3; i++) {				//indicate by blinking the leds
                 ledControl.setAllToColor(30, 0, 0);
                 delay(200);
                 ledControl.setAllToColor(0, 0, 0);
                 delay(200);
             }
-            delay(5000);
-            if (!accelgyro.testConnection()) {
+            delay(5000);			// wait for a while
+            if (!accelgyro.testConnection()) { // and try again
                 delay(10000);
                 if (!accelgyro.testConnection()) {
                     System.reset();
@@ -306,88 +302,101 @@ void loop() {
         }
     }
 
-    if (isInDockingStation) {
-        int timePassed = millis() - lastLoopTime;
-        nextFadeStep(timePassed);
+	
+	// Docking station test
+    if (isInDockingStation) { // when the device is in docking station mode
+        int timePassed = millis() - lastLoopTime; // calculate the time since last loop
+        nextFadeStep(timePassed); // and let the fade method know how much time has passed.
         lastLoopTime = millis();
     }
 
+    wlanRead(); // Read the html data before doing the gyro calculations
 
+    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz); // get the current motion data from the MPU6050
+    int orientation = getOrientation(ax, ay, az); // calculate the current orientation
+	
+    bool isInMotion; // this variable indicates whether the cube is in motion
+    bool isCubeMoving = isMoving(); // this variable is always true, when the cube is moving in any direction
 
-    wlanRead();
-
-    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    int orientation = getOrientation(ax, ay, az);
-    bool isInMotion;
-    bool isCubeMoving = isMoving();
-
-
-
-    if (showingModes && isCubeMoving) {
-        isInMotion = true;
+	
+	/*
+		Determine, whether the cube is moving
+	*/
+    if (showingModes && isCubeMoving) { // when the cube is currently showing the modes, and is moving
+        isInMotion = true; // the cube is seen as moving
         resetSleepTimer();
-    } else {
-        isInMotion = inMotion();
+    } else { // when the cube is not showing the modes or the cube is not moving
+        isInMotion = inMotion(); // the cube is only seen as moving, when it is not laying flat on one side
     }
 
-    wlanRead();
+    wlanRead(); // Read the html data after doing the gyro calculations
 
 
-    if (orientation != oldOrientation && !isInMotion) {
-        if (oldOrientation == -3 && orientation == 3) {
+	
+    if (orientation != oldOrientation && !isInMotion) { // when the orientation of the cube has changed and the cube is not moving
+        if (oldOrientation == -3 && orientation == 3) { // DEBUG way of re enabling the connection to wifi and cloud
             if (!Spark.connected()) {
                 Spark.connect();
             }
         }
         
-        dimmValues[oldOrientation+3] = ws2812BSPIController::dimmValue;
-        ws2812BSPIController::dimmValue =  dimmValues[orientation+3];
-        isInDockingStation = false;
-        oldOrientation = orientation;
-        //ws2812BSPIController::dimmValue = 1;
-        switchMode(oldOrientation);
+        dimmValues[oldOrientation+3] = ws2812BSPIController::dimmValue; // save the value to which the color on the previous orientation was dimmed 
+        ws2812BSPIController::dimmValue =  dimmValues[orientation+3]; // retreive the dimm value for the new orientation
+        isInDockingStation = false; // reset the docking station mode (in case it was true, and the cube is taken out of the docking station and layd down)
+        oldOrientation = orientation; // save the new orientation
+        switchMode(oldOrientation); // set the mode based on the new orientation
         resetSleepTimer();
         Serial.println("new orientation " + orientation);
-        vibrate(250);
+        vibrate(250); // vibrate to give tactical feedback
     }
 
-    if (!isCubeMoving) {
+    if (!isCubeMoving) { // when the cube is not moving
         int claps = 0;
-        //claps = clapDetector.detectClaps();
+        claps = clapDetector.detectClaps(); //detect claps 
 
-        switch (claps) {
-            case 1:
+        switch (claps) { //based on the number of claps, do stuff
+            case 1: // in case of one clap
 //                ledControl.setAllToColor(255, 0, 255);
 //                delay(100);
 //                switchModeLocal(oldOrientation);
                 break;
-            case 2:
+            case 2: // in case of two claps
 //                ledControl.setAllToColor(0, 255, 200);
 //                delay(100);
 //                switchModeLocal(oldOrientation);
-                sendCommand("toggle");
+                sendCommand("toggle"); //toggle the light (on->off, off->on)
                 break;
         }
     }
 
-    wlanRead();
-
-    if (isInMotion) {
-        if (!wantsToShowModes) {
-            wantsToShowModes = millis();
+	
+	/*
+		debouncer for motion detection. Since the motion detection sometimes detects wrong peaks of movement for a very short amount of time,
+		we remember the first time the movement was detected, wait for DELAY_BEFORE_SHOWING_MODES millis, check again whether the cube is still detected as moving.
+		If so, the movement is seen as genuine and the cube changes its mode to showingmodes
+	*/
+    if (isInMotion) { // when cube is moving
+        if (!wantsToShowModes) { // and no cube movement has previously been detected
+            wantsToShowModes = millis(); // remember the first time a movement is detected
         }
-    } else {
-        wantsToShowModes = 0;
-        if (showingModes) {
-            switchMode(oldOrientation);
+    } else { // when the cube is not moving
+        wantsToShowModes = 0; // reset the last time a cube movement was detected
+        if (showingModes) { // and in case we are currently showing the modes
+            switchMode(oldOrientation); // show the last remembered orientation
         }
     }
 
-    if (!showingModes && wantsToShowModes != 0 && millis() - wantsToShowModes > DELAY_BEFORE_SHOWING_MODES) {
-        showModes();
+    if (!showingModes // when we are not already showing the modes
+		&& wantsToShowModes != 0  // and a movement has been detected, and not been resetted in the meanwhile
+		&& millis() - wantsToShowModes > DELAY_BEFORE_SHOWING_MODES) { // and the delay time has passed
+        showModes(); // switch the mode to showingmodes
     }
 
 
+	/*
+		sleep timer
+		transition to sleep mode when no user action has been detected for a while
+	*/
     if (isTimeToSleep() && !sleeping && !isInDockingStation) {
         ledControl.transitionAllToColor(0, 0, 0, 500);
         Touch.reset();
@@ -395,79 +404,67 @@ void loop() {
         sleeping = true;
     }
 
-    if (!getIsPulsing() && !isInMotion) {
-        float rotVal = float(getRotationValue(orientation, gx, gy, gz)) / 32768; //Normalisierte Werte 16 bit
-        if (rotVal > 0.005 || rotVal < -0.005) {
-            dimmBuffer += rotVal;
+	/*
+		Gyro calculations to detect rotations around the horizontal axis and change the dimm value of the current mode accordingly
+	*/
+    if (!getIsPulsing() && !isInMotion) { // in case the cube is not moving (is laying flat on one side and not showing modes)
+        float rotVal = float(getRotationValue(orientation, gx, gy, gz)) / 32768; //Calculate the movement around the vertical axis based on the current orientation
+        if (rotVal > 0.005 || rotVal < -0.005) { // in case the detected rotation is greater than the normal movement "noise" 
+            dimmBuffer += rotVal; // add the detected rotation to the previously detected rotations
         }
-        if (dimmBuffer > 0.05 || dimmBuffer < -0.05) {
-            setDimmValue(dimmBuffer);
+        if (dimmBuffer > 0.05 || dimmBuffer < -0.05) { // in case the sum of detected rotations is greater than a certain threshhold
+            setDimmValue(dimmBuffer); // update the dimm value for the current mode based on the sum of rotations
             switchMode(oldOrientation);
-            dimmBuffer = 0;
-            Serial.println("cube is moving");
-            changeColorTime = millis();
-
-        }
-        /*
-         if(millis() - lastSetColorTime > 100 && !sleeping){
-            
-             sendColor(getR(0), getG(0), getB(0));
-            
-             lastSetColorTime = millis();
-         }
-         */
-
-
-
-    }
-
-    if (getIsPulsing()) {
-        //pulse();
-    }
-
-    // these methods (and a few others) are also available
-    //accelgyro.getAcceleration(&ax, &ay, &az);
-    //accelgyro.getRotation(&gx, &gy, &gz);
-
-
-    if (changeColorTime > millisColorWasSent) {
-        Serial.print("changeColorTime: ");
-        Serial.print(changeColorTime);
-        Serial.print(" lastSetColorTime: ");
-        Serial.print(millisColorWasSent);
-
-        long newUpdateTime = updateColor();
-
-        if (newUpdateTime != -1) {
-            millisColorWasSent = newUpdateTime;
+            dimmBuffer = 0; // and reset the rotation sum
+            changeColorTime = millis(); // also set the time at which the color was changed
         }
     }
+
+	/*
+		Update the network device if necessary
+	*/
+    if (changeColorTime > millisColorWasSent) { // check whether the color has changed since the last time the network device was updated
+        long newUpdateTime = updateColor(); // if so, try to update the color
+
+        if (newUpdateTime != -1) { // if the color was successfully updated, updateColor will have returned the new update time
+            millisColorWasSent = newUpdateTime; // and the time of the last update of the network device gets set accordingly
+        }
+    }
+	
+	/*
+		Docking station detection
+	*/
     if(!isInDockingStation){
         checkForDockingstation();
     }
 
-    wlanRead();
+    wlanRead(); // Read http data at the end of the loop
 
     // blink LED to indicate activity
     blinkState = !blinkState;
     digitalWrite(LED_PIN, blinkState);
 }
 
+/*
+	Check for changes in the capacity.
+	Changes happen for example when the cube is touched, or connected via usb
+*/
 void checkTouchEvents() {
-    CapTouch::Event touchEvent = Touch.getEvent();
-    if (!isInDockingStation) {
-        if (Touch.m_tReading > 2100) {
-
-            initDockingStationMode();
-            Serial.println(" Received Dock");
-            return;
+    CapTouch::Event touchEvent = Touch.getEvent(); // do the actual capacity test
+    if (!isInDockingStation) { // in case the cube is not in the docking station mode
+        if (Touch.m_tReading > 1900) { // and the result of the capacity test is greater than when its not connected over usb
+            initDockingStationMode(); // initialize the docking station mode
+            // Serial.println(" Received Dock");
+			
+            return; //dont check for other touch events
         }
     }
-    if (touchEvent == CapTouch::TouchEvent) {
-        isTouching = true;
+	
+    if (touchEvent == CapTouch::TouchEvent) { // in case a touchevent is detected
+        isTouching = true;	// set the variable accordingly
         Serial.println(" Received Touch");
-    } else if (touchEvent == CapTouch::ReleaseEvent) {
-        isTouching = false;
+    } else if (touchEvent == CapTouch::ReleaseEvent) { // in case the touch stops
+        isTouching = false; // set the variable accordingly
         Serial.println(" Received Release");
     }
 }
@@ -476,18 +473,18 @@ unsigned long millisLastDockingstationCheck = millis();
 void checkForDockingstation() {
     if (millis() - millisLastDockingstationCheck > 1000) {
         CapTouch::Event touchEvent = Touch.getEvent();
-        if (!isInDockingStation) {
-            if (Touch.m_tReading > 1900) {
-
-                initDockingStationMode();
-                Serial.println(" Received Dock");
-                return;
-            }
-        }
+		if (!isInDockingStation) { // in case the cube is not in the docking station mode
+			if (Touch.m_tReading > 1900) { // and the result of the capacity test is greater than when its not connected over usb
+				initDockingStationMode(); // initialize the docking station mode
+			}
+		}
         millisLastDockingstationCheck = millis();
     }
 }
 
+/*
+	Update the data on the connected network device, restricted to a minimum time between the updates.
+*/
 unsigned long updateColor() {
     if (millis() - millisColorWasSent > 200 && !sleeping) {
         Serial.println("updating color");
@@ -497,22 +494,25 @@ unsigned long updateColor() {
     return -1;
 }
 
+/*
+	Send the color data to the connected network device
+*/
 unsigned long sendColor(unsigned int r, unsigned int g, unsigned int b) {
-    if (oldOrientation == -3) {
-        macControl.setVolume(int(ws2812BSPIController::dimmValue * 100));
-        
+    if (oldOrientation == -3) { //in case the cube is currently in the volume control mode
+        macControl.setVolume(int(ws2812BSPIController::dimmValue * 100)); // actually dont send color information, but volume info
         return millis();
     } else //if (!client2.isConnected()) 
     {
         hueControl.sendColor(r, g, b);
-        
-        
         return millis();
 
     }
     return -1;
 }
 
+/*
+	send commands to connected network devices like "light off"
+*/
 void sendCommand(String command) {
     if (command == "off") {
         hueControl.forceTurnOff = true;
@@ -533,8 +533,11 @@ void sendCommand(String command) {
     changeColorTime = millis();
 }
 
+/*
+	Indicates which mode is on which side.
+	Indication is done by illuminating each side of the cube with a different color that represents what will happen when the cube is put down with the respective side facing upwards
+*/
 void showModes() {
-
     showingModes = true;
     ledControl.setColor(4, 255, 255, 255);
     ledControl.setColor(0, 255, 0, 255);
@@ -545,12 +548,18 @@ void showModes() {
     ledControl.show();
 }
 
+/*
+	Switch to the mode of the parameter _orientation and inform the network device of the change
+*/
 void switchMode(int _orientation) {
     Serial.println("Switching mode");
     switchModeLocal(_orientation);
     updateColor();
 }
 
+/*
+	Switch to the mode of the parameter _orientation
+*/
 void switchModeLocal(int _orientation) {
     showingModes = false;
     int dimmedValue = (int) (255 * ws2812BSPIController::dimmValue);
@@ -587,9 +596,13 @@ void switchModeLocal(int _orientation) {
     }
 }
 
+/*
+	Fade from the current color to the color specified by _orientation
+	timeMillis: the time the fading takes in ms
+*/
 void transitionToMode(int _orientation, int timeMillis) {
     showingModes = false;
-    int dimmedValue = (int) (255 * ws2812BSPIController::dimmValue);
+    int dimmedValue = (int) (255 * ws2812BSPIController::dimmValue); //convert the dimmvalue from a float between 0 and 1 to an integer between 0 and 255
     switch (_orientation) {
         case -1:
             //Serial.println("-1");
@@ -624,6 +637,9 @@ void transitionToMode(int _orientation, int timeMillis) {
     updateColor();
 }
 
+/*
+	Determines the correct rotation value based on the current orientation
+*/
 int getRotationValue(int _orientation, int _gx, int _gy, int _gz) {
     switch (_orientation) {
         case -1:
@@ -644,6 +660,9 @@ int getRotationValue(int _orientation, int _gx, int _gy, int _gz) {
     }
 }
 
+/*
+	Determine the orientation of the cube based on the acceleration values
+*/
 int getOrientation(int _ax, int _ay, int _az) {
     int x = _ax;
     int y = _ay;
@@ -674,12 +693,12 @@ int getOrientation(int _ax, int _ay, int _az) {
     return 0;
 }
 
+/*
+	Lets the leds pulse in a certain color based on the notification type
+*/
 int notification(String _type) {
-    setIsPulsing(true);
     if (_type == "facebook") {
         ledControl.transitionAllToColor(0, 0, 255,500);
-       
-        
         Serial.println("facebook incoming");
     } else if (_type == "twitter") {
         ledControl.transitionAllToColor(0, 255, 255,500);
@@ -699,45 +718,49 @@ int notification(String _type) {
         Serial.println(_type);
     }
     
-     ledControl.transitionAllToColor(0, 0, 0,500);
-    switchMode(oldOrientation);
+    ledControl.transitionAllToColor(0, 0, 0,500); //fade the colors back to 0
+    switchMode(oldOrientation); // show the mode that was showing before the notification
     return 0;
 }
 
 
 int r, g, b;
 
+/*
+	Update the dimm value of the current mode
+*/
 void setDimmValue(float _rotationValue) {
     
-    if(oldOrientation == -3){
-         rotationSensitivity = 0.05;
+    if(oldOrientation == -3){ //when the cube is in sound mode
+         rotationSensitivity = 0.05; // reduce the sensitivity
     }else{
-        rotationSensitivity = 0.1;
+        rotationSensitivity = 0.1; // else set the sensitivity to a higher value
     }
     
-    if (_rotationValue > 0.01 || _rotationValue < -0.01) { //abs() doesnt work ?!
+    if (_rotationValue > 0.01 || _rotationValue < -0.01) { //only change something if the incoming rotation value is greater than a certain threshhold
 
-        ws2812BSPIController::dimmValue += (_rotationValue * rotationSensitivity);
-
+        ws2812BSPIController::dimmValue += (_rotationValue * rotationSensitivity); //modify the dimm value based on the rotation and the rotationsensitivity
+		
+		// Ensure minimum of 0 and maximum of 1
         if (ws2812BSPIController::dimmValue < 0) {
             ws2812BSPIController::dimmValue = 0;
         } else if (ws2812BSPIController::dimmValue > 1) {
             ws2812BSPIController::dimmValue = 1;
         }
-
-        if (ws2812BSPIController::dimmValue < 0.05) {
-            if (hueControl.offNotified && !hueControl.turnedOff) {
-                ws2812BSPIController::dimmValue = 0;
-                hueControl.turnedOff = true;
+		
+		//Give feedback before turning off the leds
+        if (ws2812BSPIController::dimmValue < 0.05) { // when the dimm value is low
+            if (hueControl.offNotified && !hueControl.turnedOff) { // and the feedback has already been given, but the leds have not turned off yet
+                ws2812BSPIController::dimmValue = 0; // turn the leds off
+                hueControl.turnedOff = true; // reset the values for next time
                 hueControl.offNotified = false;
-            } else if (!hueControl.turnedOff) {
-                vibrate(200);
-                hueControl.offNotified = true;
+            } else if (!hueControl.turnedOff) { // when the feedback has not been given and the leds have not been turned off
+                vibrate(200); // give the feedback
+                hueControl.offNotified = true; // remember that the feedback was given
             }
-        } else if (hueControl.turnedOff) {
-
-            vibrate(200);
-            hueControl.turnedOff = false;
+        } else if (hueControl.turnedOff) { // when the leds are turned off and dimm value is passing the lower threshhold
+            vibrate(200); // give feedback that the leds are turned on
+            hueControl.turnedOff = false; // remeber that the leds are turned on
         }
 
         //  Serial.println(_rotationValue);
@@ -746,56 +769,29 @@ void setDimmValue(float _rotationValue) {
 }
 
 float getDimmValue() {
-
     return ws2812BSPIController::dimmValue;
 }
 
-bool isPulsing = false;
-
-void setIsPulsing(bool _isPulsing) {
-
-    isPulsing = _isPulsing;
-}
-
-bool getIsPulsing() {
-
-    return isPulsing;
-}
-
-int value;
-long currentTime = 0;
-int periode = 2000;
-float PI = 3.141F;
-
-void pulse() {
-
-    currentTime = millis();
-    //  value = 128+127*cos(2*PI/periode*currentTime);
-    /*
-        analogWrite(R, r * value / 255);
-        analogWrite(G, g * value / 255);
-        analogWrite(B, b * value / 255);
-     */
-}
-
-int gyroTollerance = 400;
-int accTollerance = 1600;
-
+/*
+	Check if the cube is moving. This is done by checking whether the gyro rotation values surpass a certain threshhold (gyroTollerance)
+*/
 bool isMoving() {
     int absGx = abs(gx);
     int absGy = abs(gy);
     int absGz = abs(gz);
 
-    // if(showingModes){
     if ((absGx + absGy + absGz) <= gyroTollerance) {
         return false;
     } else {
 
         return true;
     }
-    //}
-
 }
+
+/*
+	Check whether the cube is laying flat on one side.
+	Returns false when cube is laying flat on one side, false otherwise.
+*/
 
 bool inMotion() {
     //Cube is not moving - Check if it's laying completely on one side

@@ -55,8 +55,7 @@ int HTTPClient::makeRequest(unsigned short type,
         const char* content,
         char* response,
         unsigned short responseSize,
-        bool storeResponseHeader,
-        bool hue) {
+        bool storeResponseHeader) {
 //if(myClient.connected())return -1;
     // clear both buffers
     //TODO there was a & in front of smallbuffer
@@ -125,11 +124,8 @@ int HTTPClient::makeRequest(unsigned short type,
 
     // actually send the stored request
     // return the return value of the send method
-    if(!hue){
-        return sendRequest(host, port, response, responseSize, storeResponseHeader);
-    }else{
-        return sendHueRequest(host, port, response, responseSize, storeResponseHeader);
-    }
+    return sendRequest(host, port, response, responseSize, storeResponseHeader);
+
 
 }
 
@@ -147,24 +143,6 @@ bool HTTPClient::isConnected(){
     return connectionActive;
 }
 
-int HTTPClient::sendHueRequest(byte* host, unsigned short port, char* response, unsigned short responseSize, bool storeResponseHeader) {
-    // this is the position in the response buffer
-    short responsePosition = 0;
-    if(myClient.connected())return -1;
-    if (myClient.connected() || myClient.connect(host, port, 300)) {
-        connectionActive = true;
-        uint32_t startTime = millis();
-
-
-        myClient.write((const uint8_t *) mainbuffer, strlen(mainbuffer));
-
-    } else if (!myClient.connected()){
-        // unable to connect
-        Serial.println("unable to connect");
-        return -1;
-    }
-    return responsePosition;
-}
 
 int HTTPClient::sendRequest (byte* host, unsigned short port, char* response, unsigned short responseSize, bool storeResponseHeader) 
 {

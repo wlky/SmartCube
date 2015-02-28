@@ -8,7 +8,7 @@ byte macIP[] = {192, 168, 178, 118};
 char macResponse[512];
 
 void MacControl::sendCommandToMac(char requestBody[], char endpoint[]) {
-    macHTTPClient->makeRequest(0, endpoint, macIP, PORT, true, "", "", "", requestBody, macResponse, 512, true, false);
+    macHTTPClient->makeRequest(0, endpoint, macIP, PORT, true, "", "", "", requestBody, macResponse, 512, true);
 }
 
 void MacControl::toggleMute() {
