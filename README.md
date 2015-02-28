@@ -1,3 +1,10 @@
+# SmartCube
+
+This Project is based on the Spark core and a few more components.
+For more information please take a look at the [Wiki](https://github.com/wlky/SmartCube/wiki).
+
+
+
 # Spark Core Firmware [![Backlog](https://badge.waffle.io/spark/core-firmware.png?label=backlog&title=backlog)](https://waffle.io/spark/core-firmware) [![Build Status](https://travis-ci.org/spark/firmware.svg)](https://travis-ci.org/spark/firmware)
 
 This is the main source code repository of the Spark Core firmware libraries.
