@@ -407,7 +407,7 @@ void loop() {
 	/*
 		Gyro calculations to detect rotations around the horizontal axis and change the dimm value of the current mode accordingly
 	*/
-    if (!getIsPulsing() && !isInMotion) { // in case the cube is not moving (is laying flat on one side and not showing modes)
+    if (!isInMotion) { // in case the cube is not moving (is laying flat on one side and not showing modes)
         float rotVal = float(getRotationValue(orientation, gx, gy, gz)) / 32768; //Calculate the movement around the vertical axis based on the current orientation
         if (rotVal > 0.005 || rotVal < -0.005) { // in case the detected rotation is greater than the normal movement "noise" 
             dimmBuffer += rotVal; // add the detected rotation to the previously detected rotations
@@ -710,7 +710,6 @@ int notification(String _type) {
         ledControl.transitionAllToColor(255, 0, 0,500);
         Serial.println("email incoming");
     } else if (_type == "stop") {
-        setIsPulsing(false);
         Serial.println("stopped pulsing");
     } else {
 

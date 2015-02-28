@@ -46,12 +46,10 @@ public:
             const char* content,
             char* response,
             unsigned short responseSize,
-            bool storeResponseHeader,
-            bool hue);
+            bool storeResponseHeader);
 
 private:
     int sendRequest(byte* host, unsigned short port, char* response, unsigned short responseSize, bool storeResponseHeader);
-    int sendHueRequest(byte* host, unsigned short port, char* response, unsigned short responseSize, bool storeResponseHeader);
 
 };
 
